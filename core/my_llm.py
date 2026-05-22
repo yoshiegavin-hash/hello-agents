@@ -6,7 +6,7 @@ from typing import Optional, List, Dict, Iterator, Any
 from openai import OpenAI
 
 # 引入 Base-Agent 项目中的 HelloAgentsLLM
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'Base-Agent'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'Base-Agent'))
 from AgentLLM import HelloAgentsLLM  # type: ignore[import-untyped]
 
 
@@ -97,3 +97,38 @@ class MyLLM(HelloAgentsLLM):
                 baseUrl=base_url,
                 timeout=kwargs.get('timeout')
             )
+
+    def invoke(self, messages: List[Dict[str, str]], **kwargs) -> str:
+        """非流式调用，返回完整响应文本"""
+        temperature = kwargs.get('temperature', getattr(self, 'temperature', 0.7))
+        print(f"🧠 正在调用 {self.model} 模型...")
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                stream=False,
+            )
+            content = response.choices[0].message.content or ""
+            return content
+        except Exception as e:
+            print(f"❌ 调用LLM API时发生错误: {e}")
+            return ""
+
+    def stream_invoke(self, messages: List[Dict[str, str]], **kwargs) -> Iterator[str]:
+        """流式调用，逐字符生成响应"""
+        temperature = kwargs.get('temperature', getattr(self, 'temperature', 0.7))
+        print(f"🧠 正在调用 {self.model} 模型...")
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                stream=True,
+            )
+            for chunk in response:
+                content = chunk.choices[0].delta.content or ""
+                if content:
+                    yield content
+        except Exception as e:
+            print(f"❌ 调用LLM API时发生错误: {e}")

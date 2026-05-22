@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git config *)",
+      "Bash(git push *)",
+      "Bash(pip list *)",
+      "mcp__ide__getDiagnostics",
+      "Bash(python test_simple_agent.py)",
+      "Bash(Select-Object FullName)",
+      "Bash(python *)",
+      "PowerShell($env:PYTHONPATH = \\(Get-Location\\).Path; python agents/test_simple_agent.py)",
+      "PowerShell(python -c \"import dotenv; print\\('dotenv OK'\\)\")",
+      "PowerShell(python -c \"import tools; print\\(tools.__file__\\)\")",
+      "PowerShell($env:PYTHONPATH = \\(Get-Location\\).Path; python -c \"import tools; print\\(tools.__file__\\); print\\(dir\\(tools\\)\\)\")",
+      "PowerShell($env:PYTHONPATH = \\(Get-Location\\).Path; python -c \"import tools; print\\(tools.__path__\\)\")",
+      "PowerShell($env:PYTHONPATH = \\(Get-Location\\).Path; python -c \"from tools.registry import ToolRegistry; print\\(ToolRegistry\\)\")",
+      "Bash(D:/Downloads/anaconda3/python.exe *)",
+      "Bash(pip install *)",
+      "Bash(PYTHONPATH=. python agents/test_reflection_agent.py)"
+    ]
+  }
+}
