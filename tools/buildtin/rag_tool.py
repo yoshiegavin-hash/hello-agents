@@ -23,9 +23,9 @@ from typing import Dict, Any, List, Optional
 import os
 import time
 
-from ..base import Tool, ToolParameter
-from ...memory.rag.pipeline import create_rag_pipeline
-from ...core.my_llm import MyLLM
+from tools.base import Tool, ToolParameter
+from memory.rag.pipeline import create_rag_pipeline
+from core.my_llm import MyLLM
 
 class RAGTool(Tool):
     # 继承Tool基类，让大模型能“自主调用”
@@ -263,10 +263,13 @@ class RAGTool(Tool):
     def _add_document(self, file_path: str, document_id: str = None, namespace: Optional[str] = None, chunk_size: int = 800, chunk_overlap: int = 100, **kwargs) -> str:
         """添加文档到知识库（支持多格式）"""
         try:
+            print(f"[RAG] _add_document start: {file_path} ns={namespace}", flush=True)
             if not file_path or not os.path.exists(file_path):
                 return f"❌ 文件不存在: {file_path}"
-            
+
+            print(f"[RAG] Getting pipeline...", flush=True)
             pipeline = self._get_pipeline(namespace)
+            print(f"[RAG] Got pipeline, calling add_documents...", flush=True)
             t0 = time.time()
 
             chunks_added = pipeline["add_documents"](

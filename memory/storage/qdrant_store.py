@@ -69,9 +69,13 @@ class QdrantConnectionManager:
 
 class QdrantVectorStore:
     """Qdrant向量数据库存储实现"""
-    
+
+    # 全局连接缓存: key = (url, api_key, collection_name) -> QdrantVectorStore
+    _connection_pool: Dict[str, "QdrantVectorStore"] = {}
+    _pool_lock = threading.Lock()
+
     def __init__(
-        self, 
+        self,
         url: Optional[str] = None,
         api_key: Optional[str] = None,
         collection_name: str = "hello_agents_vectors",
@@ -82,7 +86,7 @@ class QdrantVectorStore:
     ):
         """
         初始化Qdrant向量存储 (支持云API)
-        
+
         Args:
             url: Qdrant云服务URL (如果为None则使用本地)
             api_key: Qdrant云服务API密钥
@@ -95,7 +99,7 @@ class QdrantVectorStore:
             raise ImportError(
                 "qdrant-client未安装。请运行: pip install qdrant-client>=1.6.0"
             )
-        
+
         self.url = url
         self.api_key = api_key
         self.collection_name = collection_name
@@ -115,7 +119,7 @@ class QdrantVectorStore:
         except Exception:
             self.search_ef = 128
         self.search_exact = os.getenv("QDRANT_SEARCH_EXACT", "0") == "1"
-        
+
         # 距离度量映射
         distance_map = {
             "cosine": Distance.COSINE,
@@ -123,10 +127,60 @@ class QdrantVectorStore:
             "euclidean": Distance.EUCLID,
         }
         self.distance = distance_map.get(distance.lower(), Distance.COSINE)
-        
-        # 初始化客户端
+
+        # 检查连接缓存
+        pool_key = (url or "", api_key or "", collection_name)
+        cache_key = f"{pool_key[0]}|{pool_key[1]}|{pool_key[2]}"
+
+        with QdrantVectorStore._pool_lock:
+            if cache_key in QdrantVectorStore._connection_pool:
+                cached = QdrantVectorStore._connection_pool[cache_key]
+                # 复用已有连接
+                self.client = cached.client
+                self._initialized = True
+                logger.debug(f"♻️ 复用Qdrant连接: {collection_name}")
+                return
+
+        # 首次创建，初始化客户端
         self.client = None
         self._initialize_client()
+
+        # 存入缓存
+        with QdrantVectorStore._pool_lock:
+            if cache_key not in QdrantVectorStore._connection_pool:
+                QdrantVectorStore._connection_pool[cache_key] = self
+
+    @classmethod
+    def get_or_create(
+        cls,
+        url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        collection_name: str = "hello_agents_vectors",
+        vector_size: int = 384,
+        distance: str = "cosine",
+        timeout: int = 30,
+        **kwargs
+    ) -> "QdrantVectorStore":
+        """获取或创建QdrantVectorStore实例（连接池）"""
+        pool_key = (url or "", api_key or "", collection_name)
+        cache_key = f"{pool_key[0]}|{pool_key[1]}|{pool_key[2]}"
+
+        with cls._pool_lock:
+            if cache_key in cls._connection_pool:
+                logger.debug(f"♻️ 复用Qdrant连接: {collection_name}")
+                return cls._connection_pool[cache_key]
+
+        # 首次创建
+        instance = cls(
+            url=url,
+            api_key=api_key,
+            collection_name=collection_name,
+            vector_size=vector_size,
+            distance=distance,
+            timeout=timeout,
+            **kwargs
+        )
+        return instance
         
     def _initialize_client(self):
         """初始化Qdrant客户端和集合"""
@@ -177,7 +231,7 @@ class QdrantVectorStore:
             # 检查集合是否存在
             collections = self.client.get_collections().collections
             collection_names = [c.name for c in collections]
-            
+
             if self.collection_name not in collection_names:
                 # 创建新集合
                 hnsw_cfg = None
@@ -194,19 +248,13 @@ class QdrantVectorStore:
                     hnsw_config=hnsw_cfg
                 )
                 logger.info(f"✅ 创建Qdrant集合: {self.collection_name}")
+                # 新集合才需要创建索引
+                self._ensure_payload_indexes()
             else:
                 logger.info(f"✅ 使用现有Qdrant集合: {self.collection_name}")
-                # 尝试更新 HNSW 配置
-                try:
-                    self.client.update_collection(
-                        collection_name=self.collection_name,
-                        hnsw_config=models.HnswConfigDiff(m=self.hnsw_m, ef_construct=self.hnsw_ef_construct)
-                    )
-                except Exception as ie:
-                    logger.debug(f"跳过更新HNSW配置: {ie}")
-            # 确保必要的payload索引
-            self._ensure_payload_indexes()
-                
+                # 集合已存在，跳过更新操作避免重复网络请求
+                pass
+
         except Exception as e:
             logger.error(f"❌ 集合初始化失败: {e}")
             raise
@@ -234,6 +282,7 @@ class QdrantVectorStore:
                         collection_name=self.collection_name,
                         field_name=field_name,
                         field_schema=schema_type,
+                        wait=False,  # 异步创建，避免阻塞
                     )
                 except Exception as ie:
                     # 索引已存在会报错，忽略

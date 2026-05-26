@@ -88,30 +88,66 @@ PDF文件的底层结构非常松散，哪怕用最先进的提取工具(比如�
 这个函数的存在，核心目的就是在基础转换之上，增加一道“后处理（Post-processing）”的清洗工序。
 """
 
+def _extract_pdf_text_pypdf(path: str) -> str:
+    """Fast PDF text extraction using pypdf (pure Python, no model loading)."""
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(path)
+        pages = reader.pages
+        texts = []
+        total = len(pages)
+        for i, page in enumerate(pages):
+            try:
+                t = page.extract_text()
+                if t and t.strip():
+                    texts.append(t)
+            except Exception:
+                pass
+            if (i + 1) % 5 == 0 or i == total - 1:
+                print(f"[RAG] PDF extract progress: {i+1}/{total} pages", flush=True)
+        result = "\n\n".join(texts)
+        print(f"[RAG] pypdf extraction done: {len(result)} chars from {total} pages", flush=True)
+        return result
+    except ImportError:
+        print("[RAG] pypdf not available, falling back to MarkItDown", flush=True)
+        return ""
+    except Exception as e:
+        print(f"[RAG] pypdf extraction failed: {e}", flush=True)
+        return ""
+
+
 def _enhanced_pdf_processing(path: str) -> str:
-    """
-    Enhanced PDF processing with post-processing cleanup.
-    """
-    print(f"[RAG] Using enhanced PDF processing for: {path}")
-    
-    # 使用原有MarkItDown提取
+    """Enhanced PDF processing: fast pypdf first, MarkItDown fallback."""
+    print(f"[RAG] Starting PDF processing for: {os.path.basename(path)}", flush=True)
+    import sys; sys.stdout.flush()
+
+    # Step 1: Try fast pypdf extraction (seconds, not minutes)
+    raw_text = _extract_pdf_text_pypdf(path)
+    if raw_text and len(raw_text.strip()) > 100:
+        # Step 2: Post-process the extracted text
+        print(f"[RAG] Cleaning text: {len(raw_text)} chars", flush=True)
+        cleaned_text = _post_process_pdf_text(raw_text)
+        print(f"[RAG] PDF post-processing completed: {len(raw_text)} -> {len(cleaned_text)} chars", flush=True)
+        return cleaned_text
+
+    # Step 3: Fallback to MarkItDown if pypdf failed or returned too little text
+    print(f"[RAG] pypdf returned insufficient text, trying MarkItDown...", flush=True)
     md_instance = _get_markitdown_instance()
     if md_instance is None:
         return _fallback_text_reader(path)
-    
+
     try:
         result = md_instance.convert(path)
         raw_text = getattr(result, "text_content", None)
         if not raw_text or not raw_text.strip():
             return ""
-        
-        # 后处理：清理和重组文本
+
         cleaned_text = _post_process_pdf_text(raw_text)
-        print(f"[RAG] PDF post-processing completed: {len(raw_text)} -> {len(cleaned_text)} chars")
+        print(f"[RAG] MarkItDown PDF processing completed: {len(raw_text)} -> {len(cleaned_text)} chars", flush=True)
         return cleaned_text
-        
+
     except Exception as e:
-        print(f"[WARNING] Enhanced PDF processing failed for {path}: {e}")
+        print(f"[WARNING] MarkItDown PDF processing failed: {e}", flush=True)
         return _fallback_text_reader(path)
 
 def _post_process_pdf_text(text: str) -> str:
@@ -353,24 +389,29 @@ def load_and_chunk_texts(paths: List[str], chunk_size: int = 800, chunk_overlap:
     
     for path in paths:
         if not os.path.exists(path):
-            print(f"[WARNING] File not found: {path}")
+            print(f"[WARNING] File not found: {path}", flush=True)
             continue
-            
-        print(f"[RAG] Processing: {path}")
+
+        print(f"[RAG] Processing file: {os.path.basename(path)}", flush=True)
+        t_extract = time.time()
         ext = (os.path.splitext(path)[1] or '').lower()
-        
+
         # Convert to markdown using MarkItDown
         markdown_text = _convert_to_markdown(path)
+        t_extract_end = time.time()
         if not markdown_text.strip():
-            print(f"[WARNING] No content extracted from: {path}")
+            print(f"[WARNING] No content extracted from: {path}", flush=True)
             continue
-        
+        print(f"[RAG] Text extraction done: {len(markdown_text)} chars ({t_extract_end - t_extract:.1f}s)", flush=True)
+
         lang = _detect_lang(markdown_text)
         doc_id = hashlib.md5(f"{path}|{len(markdown_text)}".encode('utf-8')).hexdigest()
-        
+        print(f"[RAG] Chunking text (lang={lang})...", flush=True)
+
         # Always use markdown-aware chunking for better structure preservation
         para = _split_paragraphs_with_headings(markdown_text)
         token_chunks = _chunk_paragraphs(para, chunk_tokens=max(1, chunk_size), overlap_tokens=max(0, chunk_overlap))
+        print(f"[RAG] Chunked into {len(token_chunks)} segments", flush=True)
         
         for ch in token_chunks:
             content = ch["content"]
@@ -548,8 +589,13 @@ def index_chunks(
     
     # Batch encoding with unified embedder
     vecs: List[List[float]] = []
-    for i in range(0, len(processed_texts), batch_size):
+    total_texts = len(processed_texts)
+    for i in range(0, total_texts, batch_size):
         part = processed_texts[i:i+batch_size]
+        batch_num = i // batch_size + 1
+        total_batches = (total_texts + batch_size - 1) // batch_size
+        print(f"[RAG] Embedding batch {batch_num}/{total_batches} (texts {i+1}-{min(i+batch_size, total_texts)})", flush=True)
+        batch_start = time.time()
         try:
             # Use unified embedder directly (handles caching internally)
             part_vecs = embedder.encode(part)
@@ -606,7 +652,6 @@ def index_chunks(
             for j in range(0, len(part), 8):  # 更小的批次
                 small_part = part[j:j+8]
                 try:
-                    import time
                     time.sleep(2)  # 等待2秒避免频率限制
                     
                     small_vecs = embedder.encode(small_part)
@@ -639,7 +684,8 @@ def index_chunks(
             if not success:
                 print(f"[ERROR] 批次 {i} 完全失败，使用零向量")
         
-        print(f"[RAG] Embedding progress: {min(i+batch_size, len(processed_texts))}/{len(processed_texts)}")
+        batch_time = time.time() - batch_start
+        print(f"[RAG] Embedding progress: {min(i+batch_size, total_texts)}/{total_texts} (batch {batch_num}/{total_batches}, {batch_time:.1f}s)", flush=True)
     
     # Prepare metadata with RAG tags
     metas: List[Dict] = []
@@ -659,12 +705,14 @@ def index_chunks(
         metas.append(meta)
         ids.append(ch["id"])
     
-    print(f"[RAG] Qdrant upsert start: n={len(vecs)}")
+    print(f"[RAG] Qdrant upsert start: n={len(vecs)}", flush=True)
+    upsert_start = time.time()
     success = store.add_vectors(vectors=vecs, metadata=metas, ids=ids)
+    upsert_time = time.time() - upsert_start
     if success:
-        print(f"[RAG] Qdrant upsert done: {len(vecs)} vectors indexed")
+        print(f"[RAG] Qdrant upsert done: {len(vecs)} vectors indexed ({upsert_time:.1f}s)", flush=True)
     else:
-        print(f"[RAG] Qdrant upsert failed")
+        print(f"[RAG] Qdrant upsert failed", flush=True)
         raise RuntimeError("Failed to index vectors to Qdrant")
 
 
@@ -1175,13 +1223,17 @@ def create_rag_pipeline(
 ) -> Dict[str, Any]:
     """
     Create a complete RAG pipeline with Qdrant and unified embedding.
-    
+
+    Uses connection pooling to avoid redundant Qdrant initialization.
+
     Returns:
         Dict containing store, namespace, and helper functions
     """
     dimension = get_dimension(384)
-    
-    store = QdrantVectorStore(
+
+    # Connection pool: reuse existing QdrantVectorStore instances
+    from memory.storage.qdrant_store import QdrantVectorStore
+    store = QdrantVectorStore.get_or_create(
         url=qdrant_url,
         api_key=qdrant_api_key,
         collection_name=collection_name,
