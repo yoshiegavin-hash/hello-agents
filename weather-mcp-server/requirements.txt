@@ -1,0 +1,3 @@
+hello-agents @ git+https://github.com/yoshiegavin-hash/hello-agents.git
+requests>=2.31.0
+

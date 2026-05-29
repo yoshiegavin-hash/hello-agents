@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hello-agents"
+version = "0.2.2"
+description = "Multi-agent framework with MCP, A2A, and memory support"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "base-agent @ git+https://github.com/yoshiegavin-hash/Base-Agent.git",
+    "openai>=1.0.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0",
+    "fastmcp>=0.1.0",
+    "requests>=2.31.0",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+rag = ["qdrant-client", "sentence-transformers"]
+memory = ["scikit-learn", "spacy"]
+vision = ["torch", "transformers", "Pillow", "librosa"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
